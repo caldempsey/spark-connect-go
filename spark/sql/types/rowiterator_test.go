@@ -140,6 +140,7 @@ func TestRowIterator_ErrorPropagation(t *testing.T) {
 
 func TestRowIterator_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	// Create a Seq2 that yields records indefinitely
 	seq2 := func(yield func(arrow.Record, error) bool) {
@@ -152,7 +153,7 @@ func TestRowIterator_ContextCancellation(t *testing.T) {
 				record := createTestRecord([]string{"row"})
 				record.Retain() // Consumer will release
 				if !yield(record, nil) {
-					record.Release() // Clean up if yield returns false
+					record.Release()
 					return
 				}
 			}
@@ -177,13 +178,11 @@ func TestRowIterator_ContextCancellation(t *testing.T) {
 			cancel()
 		}
 
-		// Safety limit to prevent infinite loop
 		if count > 10 {
 			break
 		}
 	}
 
-	// Should have read at least one row before cancellation
 	assert.GreaterOrEqual(t, len(rows), 1)
 	assert.Equal(t, "row", rows[0].At(0))
 }
