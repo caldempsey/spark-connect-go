@@ -50,7 +50,7 @@ type SparkConnectClient interface {
 type ExecuteResponseStream interface {
 	// ToTable consumes all arrow.Record batches to a single arrow.Table. Useful for collecting all query results into a client DF.
 	ToTable() (*types.StructType, arrow.Table, error)
-	// ToRecordIterator lazily consumes each arrow.Record retrieved by a query. Useful for streaming query results.
-	ToRecordIterator(ctx context.Context) iter.Seq2[arrow.Record, error]
+	// ToRecordSequence lazily consumes each arrow.Record retrieved by a query. Useful for streaming query results.
+	ToRecordSequence(ctx context.Context) iter.Seq2[arrow.Record, error]
 	Properties() map[string]any
 }

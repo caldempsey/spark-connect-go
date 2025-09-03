@@ -200,6 +200,12 @@ type DataFrame interface {
 	// Sort returns a new DataFrame sorted by the specified columns.
 	Sort(ctx context.Context, columns ...column.Convertible) (DataFrame, error)
 	Stat() DataFrameStatFunctions
+	// StreamRows exposes a pull-based iterator over Arrow record batches from Spark types.RowPull2.
+	// No rows are fetched from Spark over gRPC until the previous one has been consumed.
+	// It provides no internal buffering: each Row is produced only when the caller
+	// requests it, ensuring client back-pressure is respected.
+	// types.RowPull2 is single use (can only be ranged once).
+	StreamRows(ctx context.Context) (types.RowPull2, error)
 	// Subtract subtracts the other DataFrame from the current DataFrame. And only returns
 	// distinct rows.
 	Subtract(ctx context.Context, other DataFrame) DataFrame
@@ -214,7 +220,6 @@ type DataFrame interface {
 	Take(ctx context.Context, limit int32) ([]types.Row, error)
 	// ToArrow returns the Arrow representation of the DataFrame.
 	ToArrow(ctx context.Context) (*arrow.Table, error)
-	ToLocalIterator(ctx context.Context) (types.RowIterator, error)
 	// Union is an alias for UnionAll
 	Union(ctx context.Context, other DataFrame) DataFrame
 	// UnionAll returns a new DataFrame containing union of rows in this and another DataFrame.
@@ -937,15 +942,15 @@ func (df *dataFrameImpl) ToArrow(ctx context.Context) (*arrow.Table, error) {
 	return &table, nil
 }
 
-func (df *dataFrameImpl) ToLocalIterator(ctx context.Context) (types.RowIterator, error) {
+func (df *dataFrameImpl) StreamRows(ctx context.Context) (types.RowPull2, error) {
 	responseClient, err := df.session.client.ExecutePlan(ctx, df.createPlan())
 	if err != nil {
 		return nil, sparkerrors.WithType(fmt.Errorf("failed to execute plan: %w", err), sparkerrors.ExecutionError)
 	}
 
-	recordChan, errorChan, schema := responseClient.ToRecordBatches(ctx)
+	seq2 := responseClient.ToRecordSequence(ctx)
 
-	return types.NewRowIterator(ctx, recordChan, errorChan, schema), nil
+	return types.NewRowPull2(ctx, seq2), nil
 }
 
 func (df *dataFrameImpl) UnionAll(ctx context.Context, other DataFrame) DataFrame {

@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestToRecordBatches_ChannelClosureWithoutData(t *testing.T) {
+func TestToRecordIterator_ChannelClosureWithoutData(t *testing.T) {
 	// Iterator should complete without yielding any records when no arrow batches present
 	ctx := context.Background()
 
@@ -56,7 +56,7 @@ func TestToRecordBatches_ChannelClosureWithoutData(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("select 1"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 
 	recordsReceived := 0
 	errorsReceived := 0
@@ -75,7 +75,7 @@ func TestToRecordBatches_ChannelClosureWithoutData(t *testing.T) {
 	assert.Equal(t, 0, errorsReceived, "No errors should occur")
 }
 
-func TestToRecordBatches_ArrowBatchStreaming(t *testing.T) {
+func TestToRecordIterator_ArrowBatchStreaming(t *testing.T) {
 	// Arrow batch data should be correctly streamed
 	ctx := context.Background()
 
@@ -126,7 +126,7 @@ func TestToRecordBatches_ArrowBatchStreaming(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("select col"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 
 	records := collectRecordsFromSeq2(t, iter)
 
@@ -142,7 +142,7 @@ func TestToRecordBatches_ArrowBatchStreaming(t *testing.T) {
 	assert.Equal(t, "value3", col.Value(2))
 }
 
-func TestToRecordBatches_MultipleArrowBatches(t *testing.T) {
+func TestToRecordIterator_MultipleArrowBatches(t *testing.T) {
 	// Multiple arrow batches should be streamed in order
 	ctx := context.Background()
 
@@ -207,7 +207,7 @@ func TestToRecordBatches_MultipleArrowBatches(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("select col"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 	records := collectRecordsFromSeq2(t, iter)
 
 	require.Len(t, records, 2, "Should receive exactly two records")
@@ -223,7 +223,7 @@ func TestToRecordBatches_MultipleArrowBatches(t *testing.T) {
 	assert.Equal(t, "batch2_row2", col2.Value(1))
 }
 
-func TestToRecordBatches_ContextCancellationStopsStreaming(t *testing.T) {
+func TestToRecordIterator_ContextCancellationStopsStreaming(t *testing.T) {
 	// Context cancellation should stop streaming
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -259,7 +259,7 @@ func TestToRecordBatches_ContextCancellationStopsStreaming(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("select 1"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 
 	// Cancel the context immediately
 	cancel()
@@ -288,7 +288,7 @@ func TestToRecordBatches_ContextCancellationStopsStreaming(t *testing.T) {
 	}
 }
 
-func TestToRecordBatches_RPCErrorPropagation(t *testing.T) {
+func TestToRecordIterator_RPCErrorPropagation(t *testing.T) {
 	// RPC errors should be properly propagated
 	ctx := context.Background()
 
@@ -328,7 +328,7 @@ func TestToRecordBatches_RPCErrorPropagation(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("select 1"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 
 	errorReceived := false
 	for _, err := range iter {
@@ -343,7 +343,7 @@ func TestToRecordBatches_RPCErrorPropagation(t *testing.T) {
 	assert.True(t, errorReceived, "Expected RPC error")
 }
 
-func TestToRecordBatches_SessionValidation(t *testing.T) {
+func TestToRecordIterator_SessionValidation(t *testing.T) {
 	// Session validation error should be returned for wrong session ID
 	ctx := context.Background()
 
@@ -378,7 +378,7 @@ func TestToRecordBatches_SessionValidation(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("select 1"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 
 	errorReceived := false
 	for _, err := range iter {
@@ -393,7 +393,7 @@ func TestToRecordBatches_SessionValidation(t *testing.T) {
 	assert.True(t, errorReceived, "Expected session validation error")
 }
 
-func TestToRecordBatches_SqlCommandResultProperties(t *testing.T) {
+func TestToRecordIterator_SqlCommandResultProperties(t *testing.T) {
 	// SQL command results should be captured in properties
 	ctx := context.Background()
 
@@ -421,7 +421,7 @@ func TestToRecordBatches_SqlCommandResultProperties(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("test query"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 	_ = collectRecordsFromSeq2(t, iter)
 
 	// Properties should contain the SQL command result
@@ -429,7 +429,7 @@ func TestToRecordBatches_SqlCommandResultProperties(t *testing.T) {
 	assert.NotNil(t, props["sql_command_result"])
 }
 
-func TestToRecordBatches_MixedResponseTypes(t *testing.T) {
+func TestToRecordIterator_MixedResponseTypes(t *testing.T) {
 	// Mixed response types should be handled correctly in realistic order
 	ctx := context.Background()
 
@@ -535,7 +535,7 @@ func TestToRecordBatches_MixedResponseTypes(t *testing.T) {
 	stream, err := c.ExecutePlan(ctx, mocks.NewSqlCommand("SELECT * FROM table"))
 	require.NoError(t, err)
 
-	iter := stream.ToRecordIterator(ctx)
+	iter := stream.ToRecordSequence(ctx)
 	records := collectRecordsFromSeq2(t, iter)
 
 	require.Len(t, records, 2, "Should receive exactly two arrow batches")

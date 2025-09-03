@@ -444,9 +444,9 @@ func (c *ExecutePlanClient) ToTable() (*types.StructType, arrow.Table, error) {
 	}
 }
 
-// ToRecordIterator returns a single Seq2 iterator lazily fetching
-func (c *ExecutePlanClient) ToRecordIterator(ctx context.Context) iter.Seq2[arrow.Record, error] {
-	// Return Seq2 iterator that directly yields results as they arrive
+// ToRecordSequence returns a single Seq2 iterator
+func (c *ExecutePlanClient) ToRecordSequence(ctx context.Context) iter.Seq2[arrow.Record, error] {
+	// Return Seq2 iterator that directly yields results as they arrive, upstream callers can convert this as needed
 	iterator := func(yield func(arrow.Record, error) bool) {
 		// Explicitly needed when tracking re-attachable execution.
 		c.done = false
