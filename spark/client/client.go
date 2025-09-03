@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 
 	"github.com/apache/spark-connect-go/spark/sql/utils"
 
@@ -443,17 +444,10 @@ func (c *ExecutePlanClient) ToTable() (*types.StructType, arrow.Table, error) {
 	}
 }
 
-func (c *ExecutePlanClient) ToRecordBatches(ctx context.Context) (<-chan arrow.Record, <-chan error, *types.StructType) {
-	recordChan := make(chan arrow.Record, 10)
-	errorChan := make(chan error, 1)
-
-	go func() {
-		defer func() {
-			// Ensure channels are always closed to prevent goroutine leaks
-			close(recordChan)
-			close(errorChan)
-		}()
-
+// ToRecordIterator returns a single Seq2 iterator lazily fetching
+func (c *ExecutePlanClient) ToRecordIterator(ctx context.Context) iter.Seq2[arrow.Record, error] {
+	// Return Seq2 iterator that directly yields results as they arrive
+	iterator := func(yield func(arrow.Record, error) bool) {
 		// Explicitly needed when tracking re-attachable execution.
 		c.done = false
 
@@ -461,15 +455,10 @@ func (c *ExecutePlanClient) ToRecordBatches(ctx context.Context) (<-chan arrow.R
 			// Check for context cancellation before each iteration
 			select {
 			case <-ctx.Done():
-				// Context cancelled - send the error and return immediately
-				select {
-				case errorChan <- ctx.Err():
-				default:
-					// Channel might be full, but we're exiting anyway
-				}
+				// Yield the context error and stop
+				yield(nil, ctx.Err())
 				return
 			default:
-				// Continue with normal processing
 			}
 
 			resp, err := c.responseStream.Recv()
@@ -477,72 +466,52 @@ func (c *ExecutePlanClient) ToRecordBatches(ctx context.Context) (<-chan arrow.R
 			// Check for context cancellation after potentially blocking operations
 			select {
 			case <-ctx.Done():
-				select {
-				case errorChan <- ctx.Err():
-				default:
-				}
+				yield(nil, ctx.Err())
 				return
 			default:
 			}
 
-			// EOF is received when the last message has been processed and the stream
-			// finished normally. Handle this FIRST, before any other processing.
+			// EOF is received when the last message has been processed (Observed on Databricks instances)
 			if errors.Is(err, io.EOF) {
-				return
+				return // Clean end of stream
 			}
 
-			// If there's any other error, handle it
+			// Handle other errors
 			if err != nil {
 				if se := sparkerrors.FromRPCError(err); se != nil {
-					select {
-					case errorChan <- sparkerrors.WithType(se, sparkerrors.ExecutionError):
-					case <-ctx.Done():
-						return
-					}
+					yield(nil, sparkerrors.WithType(se, sparkerrors.ExecutionError))
 				} else {
-					// Unknown error - still send it
-					select {
-					case errorChan <- err:
-					case <-ctx.Done():
-						return
-					}
+					yield(nil, err)
 				}
-				return
+				return // Stop on error
 			}
 
-			// Only proceed if we have a valid response (no error)
+			// Only proceed if we have a valid response
 			if resp == nil {
 				continue
 			}
 
-			// Check that the server returned the session ID that we were expecting
-			// and that it has not changed.
+			// Validate session ID
 			if resp.GetSessionId() != c.sessionId {
-				select {
-				case errorChan <- sparkerrors.WithType(&sparkerrors.InvalidServerSideSessionDetailsError{
-					OwnSessionId:      c.sessionId,
-					ReceivedSessionId: resp.GetSessionId(),
-				}, sparkerrors.InvalidServerSideSessionError):
-				case <-ctx.Done():
-					return
-				}
+				yield(nil, sparkerrors.WithType(
+					&sparkerrors.InvalidServerSideSessionDetailsError{
+						OwnSessionId:      c.sessionId,
+						ReceivedSessionId: resp.GetSessionId(),
+					}, sparkerrors.InvalidServerSideSessionError))
 				return
 			}
 
-			// Check if the response has already the schema set and if yes, convert
-			// the proto DataType to a StructType.
+			// Process schema if present
 			if resp.Schema != nil {
-				c.schema, err = types.ConvertProtoDataTypeToStructType(resp.Schema)
-				if err != nil {
-					select {
-					case errorChan <- sparkerrors.WithType(err, sparkerrors.ExecutionError):
-					case <-ctx.Done():
-						return
-					}
+				var schemaErr error
+				c.schema, schemaErr = types.ConvertProtoDataTypeToStructType(resp.Schema)
+				if schemaErr != nil {
+					yield(nil, sparkerrors.WithType(schemaErr, sparkerrors.ExecutionError))
 					return
 				}
 			}
 
+			// Process response types
 			switch x := resp.ResponseType.(type) {
 			case *proto.ExecutePlanResponse_SqlCommandResult_:
 				if val := x.SqlCommandResult.GetRelation(); val != nil {
@@ -550,24 +519,16 @@ func (c *ExecutePlanClient) ToRecordBatches(ctx context.Context) (<-chan arrow.R
 				}
 
 			case *proto.ExecutePlanResponse_ArrowBatch_:
-				// This is what we want - stream the record batch
 				record, err := types.ReadArrowBatchToRecord(x.ArrowBatch.Data, c.schema)
 				if err != nil {
-					select {
-					case errorChan <- err:
-					case <-ctx.Done():
-						return
-					}
+					yield(nil, err)
 					return
 				}
 
-				// Try to send the record, but respect context cancellation
-				select {
-				case recordChan <- record:
-					// Successfully sent
-				case <-ctx.Done():
-					// Context cancelled while trying to send - release the record and exit
-					record.Release()
+				// Yield the record and check if consumer wants to continue
+				if !yield(record, nil) {
+					// Consumer stopped iteration early
+					// Note: Consumer is responsible for releasing the record
 					return
 				}
 
@@ -576,16 +537,15 @@ func (c *ExecutePlanClient) ToRecordBatches(ctx context.Context) (<-chan arrow.R
 				return
 
 			case *proto.ExecutePlanResponse_ExecutionProgress_:
-				// Progress updates - we can ignore these or optionally expose them
-				// through a separate channel in the future
+				// Progress updates - ignore for now
 
 			default:
-				// Explicitly ignore messages that we cannot process at the moment.
+				// Explicitly ignore unknown message types
 			}
 		}
-	}()
+	}
 
-	return recordChan, errorChan, c.schema
+	return iterator
 }
 
 func NewExecuteResponseStream(
