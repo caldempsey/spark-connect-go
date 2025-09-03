@@ -340,7 +340,6 @@ func TestRowSeq2_DirectUsage(t *testing.T) {
 	recordSeq := createTestSeq2(records, nil)
 	rowSeq := types.NewRowSequence(context.Background(), recordSeq)
 
-	// Use the Seq2 directly with range
 	var rows []types.Row
 	for row, err := range rowSeq {
 		require.NoError(t, err)
@@ -356,7 +355,6 @@ func TestRowSeq2_DirectUsage(t *testing.T) {
 
 func TestRowIterator_MultipleIterations(t *testing.T) {
 	// Test that we can iterate multiple times using the same iterator
-	// Seq2 is reusable - each range starts the sequence fresh
 	records := []arrow.Record{
 		createTestRecord([]string{"row1", "row2"}),
 	}
@@ -370,7 +368,6 @@ func TestRowIterator_MultipleIterations(t *testing.T) {
 	seq2 := createTestSeq2(records, nil)
 	next := types.NewRowPull2(context.Background(), seq2)
 
-	// First iteration - consume all
 	var rows1 []types.Row
 	for row, err := range next {
 		require.NoError(t, err)
@@ -378,7 +375,8 @@ func TestRowIterator_MultipleIterations(t *testing.T) {
 	}
 	assert.Len(t, rows1, 2)
 
-	// Second iteration - Seq2 is pull only, should be empty
+	// Second iteration, Seq2 is a Pull2 so should be exhausted of rows to fetch
+	// https://pkg.go.dev/iter#Pull2 (Go doc defines this without an explicit type to split the difference)
 	var rows2 []types.Row
 	for row, err := range next {
 		require.NoError(t, err)
